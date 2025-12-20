@@ -1,0 +1,3 @@
+[submodule "kanban-agents"]
+	path = kanban-agents
+	url = https://github.com/hckmseduardo/kanban-agents.git
