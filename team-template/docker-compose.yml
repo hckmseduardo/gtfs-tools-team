@@ -1,0 +1,177 @@
+# GTFS-Editor Team Instance Template
+# This template is used by the orchestrator to provision new teams
+# Environment variables are substituted at deployment time:
+#   - TEAM_SLUG: Team identifier (e.g., "acme-transit")
+#   - DOMAIN: Base domain (e.g., "app.gtfs-tools.com")
+#   - DATA_PATH: Host path for team data
+#   - TEAM_DB_PASSWORD: PostgreSQL password
+#   - TEAM_SECRET_KEY: Application secret key
+#   - CROSS_DOMAIN_SECRET: Cross-domain auth secret
+
+services:
+  # Team's PostgreSQL with PostGIS
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: gtfs-team-${TEAM_SLUG}-postgres
+    environment:
+      POSTGRES_DB: gtfs_editor
+      POSTGRES_USER: gtfs_user
+      POSTGRES_PASSWORD: ${TEAM_DB_PASSWORD}
+    volumes:
+      - ${DATA_PATH}/postgres:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d:ro
+    networks:
+      - team-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gtfs_user -d gtfs_editor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Team's Redis (for Celery)
+  redis:
+    image: redis:7-alpine
+    container_name: gtfs-team-${TEAM_SLUG}-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - ${DATA_PATH}/redis:/data
+    networks:
+      - team-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Team's Backend API
+  api:
+    image: gtfs-team-api:latest
+    container_name: gtfs-team-${TEAM_SLUG}-api
+    environment:
+      - TEAM_SLUG=${TEAM_SLUG}
+      - DOMAIN=${DOMAIN}
+      - DATABASE_URL=postgresql+asyncpg://gtfs_user:${TEAM_DB_PASSWORD}@gtfs-team-${TEAM_SLUG}-postgres:5432/gtfs_editor
+      - REDIS_URL=redis://gtfs-team-${TEAM_SLUG}-redis:6379/0
+      - CELERY_BROKER_URL=redis://gtfs-team-${TEAM_SLUG}-redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://gtfs-team-${TEAM_SLUG}-redis:6379/2
+      - VALHALLA_URL=http://gtfs-valhalla:8002
+      - SECRET_KEY=${TEAM_SECRET_KEY}
+      - CROSS_DOMAIN_SECRET=${CROSS_DOMAIN_SECRET}
+      - PORTAL_API_URL=https://${DOMAIN}/api
+      - GTFS_VALIDATION_HOST_PATH=${GTFS_VALIDATION_HOST_PATH:-/Volumes/dados/projects/GTFS-Editor/validation_data}
+      # Email configuration (SMTP)
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-smtp}
+      - EMAIL_FROM_EMAIL=${EMAIL_FROM_EMAIL}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-GTFS Editor}
+      - SMTP_HOST=${SMTP_HOST:-smtp.protonmail.ch}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+    volumes:
+      - ${DATA_PATH}/uploads:/tmp/gtfs-uploads
+      # Share validation output/input directory with host so API can serve reports
+      - ${GTFS_VALIDATION_HOST_PATH:-/Volumes/dados/projects/GTFS-Editor/validation_data}:/tmp/gtfs-validation-output
+    networks:
+      - team-internal
+      - gtfs-network
+    labels:
+      - "traefik.enable=true"
+      # API routing (no strip prefix - backend expects /api/v1/...)
+      # Prefixed with 'gtfs-' to avoid conflicts with other projects (e.g., kanban)
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-api.rule=Host(`${TEAM_SLUG}.${DOMAIN}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-api.entrypoints=websecure"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-api.tls=true"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-api.service=gtfs-${TEAM_SLUG}-api"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-api.middlewares=cors-headers@file,secure-headers@file"
+      - "traefik.http.services.gtfs-${TEAM_SLUG}-api.loadbalancer.server.port=8000"
+      # WebSocket routing
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-ws.rule=Host(`${TEAM_SLUG}.${DOMAIN}`) && PathPrefix(`/ws`)"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-ws.entrypoints=websecure"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-ws.tls=true"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-ws.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-ws.service=gtfs-${TEAM_SLUG}-ws"
+      - "traefik.http.services.gtfs-${TEAM_SLUG}-ws.loadbalancer.server.port=8000"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Team's Celery Worker
+  worker:
+    image: gtfs-team-api:latest
+    container_name: gtfs-team-${TEAM_SLUG}-worker
+    command: celery -A app.tasks worker --loglevel=info --concurrency=2
+    environment:
+      - TEAM_SLUG=${TEAM_SLUG}
+      - DATABASE_URL=postgresql+asyncpg://gtfs_user:${TEAM_DB_PASSWORD}@gtfs-team-${TEAM_SLUG}-postgres:5432/gtfs_editor
+      - REDIS_URL=redis://gtfs-team-${TEAM_SLUG}-redis:6379/0
+      - CELERY_BROKER_URL=redis://gtfs-team-${TEAM_SLUG}-redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://gtfs-team-${TEAM_SLUG}-redis:6379/2
+      - VALHALLA_URL=http://gtfs-valhalla:8002
+      - GTFS_VALIDATION_HOST_PATH=${GTFS_VALIDATION_HOST_PATH:-/Volumes/dados/projects/GTFS-Editor/validation_data}
+    volumes:
+      - ${DATA_PATH}/uploads:/tmp/gtfs-uploads
+      # Allow running dockerized GTFS validators (MobilityData)
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Share validation output/input directory with host for validator container
+      - ${GTFS_VALIDATION_HOST_PATH:-/Volumes/dados/projects/GTFS-Editor/validation_data}:/tmp/gtfs-validation-output
+    networks:
+      - team-internal
+      - gtfs-network
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Team's Celery Beat (scheduler)
+  beat:
+    image: gtfs-team-api:latest
+    container_name: gtfs-team-${TEAM_SLUG}-beat
+    command: celery -A app.tasks beat --loglevel=info
+    environment:
+      - TEAM_SLUG=${TEAM_SLUG}
+      - DATABASE_URL=postgresql+asyncpg://gtfs_user:${TEAM_DB_PASSWORD}@gtfs-team-${TEAM_SLUG}-postgres:5432/gtfs_editor
+      - CELERY_BROKER_URL=redis://gtfs-team-${TEAM_SLUG}-redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://gtfs-team-${TEAM_SLUG}-redis:6379/2
+    networks:
+      - team-internal
+    restart: unless-stopped
+    depends_on:
+      - worker
+
+  # Team's Frontend
+  web:
+    image: gtfs-team-web:latest
+    container_name: gtfs-team-${TEAM_SLUG}-web
+    environment:
+      - VITE_API_URL=https://${TEAM_SLUG}.${DOMAIN}/api/v1
+      - VITE_TEAM_SLUG=${TEAM_SLUG}
+    networks:
+      - gtfs-network
+    labels:
+      - "traefik.enable=true"
+      # Prefixed with 'gtfs-' to avoid conflicts with other projects (e.g., kanban)
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-web.rule=Host(`${TEAM_SLUG}.${DOMAIN}`) && !PathPrefix(`/api`) && !PathPrefix(`/ws`)"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-web.entrypoints=websecure"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-web.tls=true"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-web.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-web.service=gtfs-${TEAM_SLUG}-web"
+      - "traefik.http.routers.gtfs-${TEAM_SLUG}-web.middlewares=secure-headers@file,compress@file"
+      - "traefik.http.services.gtfs-${TEAM_SLUG}-web.loadbalancer.server.port=80"
+    restart: unless-stopped
+
+networks:
+  # Team's isolated internal network
+  team-internal:
+    name: gtfs-team-${TEAM_SLUG}
+    driver: bridge
+  # Shared network for Traefik and Valhalla access
+  gtfs-network:
+    external: true

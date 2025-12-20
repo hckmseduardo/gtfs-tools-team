@@ -1,0 +1,75 @@
+[tool.poetry]
+name = "gtfs-tools-backend"
+version = "0.1.0"
+description = "GTFS Editor Backend API"
+authors = ["Your Team <team@example.com>"]
+readme = "README.md"
+packages = [{include = "app"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.109.0"
+uvicorn = {extras = ["standard"], version = "^0.27.0"}
+pydantic = {extras = ["email"], version = "^2.5.0"}
+pydantic-settings = "^2.1.0"
+sqlalchemy = "^2.0.25"
+alembic = "^1.13.1"
+asyncpg = "^0.29.0"
+psycopg2-binary = "^2.9.9"
+redis = "^5.0.1"
+celery = "^5.3.4"
+python-jose = {extras = ["cryptography"], version = "^3.3.0"}
+passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+bcrypt = "~4.0.1"
+python-multipart = "^0.0.6"
+msal = "^1.26.0"
+aiofiles = "^23.2.1"
+httpx = "^0.26.0"
+python-dotenv = "^1.0.0"
+geoalchemy2 = "^0.14.3"
+shapely = "^2.0.2"
+azure-keyvault-secrets = "^4.7.0"
+azure-identity = "^1.15.0"
+gtfs-realtime-bindings = "^1.0.0"
+protobuf = "^4.25.0"
+docker = "^7.0.0"
+python-slugify = "^8.0.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.3"
+pytest-asyncio = "^0.23.3"
+pytest-cov = "^4.1.0"
+black = "^23.12.1"
+isort = "^5.13.2"
+flake8 = "^7.0.0"
+mypy = "^1.8.0"
+pre-commit = "^3.6.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=app --cov-report=html --cov-report=term-missing"
