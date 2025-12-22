@@ -169,9 +169,17 @@ services:
 
   # Team's Kanban AI Agents
   kanban-agent:
-    image: kanban-agents:latest
+    build:
+      context: ./kanban-agent
+      dockerfile: Dockerfile
+    image: gtfs-team-kanban-agent:latest
     container_name: gtfs-team-${TEAM_SLUG}-kanban-agent
     environment:
+      # Git repository settings (pulls latest code on startup)
+      - KANBAN_AGENTS_REPO=${KANBAN_AGENTS_REPO:-https://github.com/hckmseduardo/kanban-agents.git}
+      - KANBAN_AGENTS_BRANCH=${KANBAN_AGENTS_BRANCH:-main}
+      - AUTO_UPDATE=${AUTO_UPDATE:-true}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       # Team context
       - TEAM_SLUG=${TEAM_SLUG}
       # Kanban API settings (webhook endpoint for this team)
