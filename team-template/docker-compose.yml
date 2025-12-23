@@ -209,6 +209,7 @@ services:
       # Provider-specific API keys
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ABACUS_API_KEY=${ABACUS_API_KEY:-}
       # Target project path inside container
       # In sandbox mode, this is the local cloned code folder
       - TARGET_PROJECT_PATH=/app/target-project
