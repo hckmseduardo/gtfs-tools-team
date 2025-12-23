@@ -167,7 +167,7 @@ services:
       - "traefik.http.services.gtfs-${TEAM_SLUG}-web.loadbalancer.server.port=80"
     restart: unless-stopped
 
-  # Team's Kanban AI Agents
+  # Team's Kanban AI Agents (connects to external kanban.amazing-ai.tools)
   kanban-agent:
     build:
       context: ./kanban-agent
@@ -182,8 +182,9 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       # Team context
       - TEAM_SLUG=${TEAM_SLUG}
-      # Kanban API settings (webhook endpoint for this team)
-      - KANBAN_API_URL=https://${TEAM_SLUG}.${DOMAIN}/kanban
+      # Kanban API settings (external kanban service)
+      - KANBAN_API_URL=${KANBAN_API_URL:-https://gtfs-tools.kanban.amazing-ai.tools/api}
+      - KANBAN_API_TOKEN=${KANBAN_API_TOKEN:-}
       - KANBAN_WEBHOOK_SECRET=${KANBAN_WEBHOOK_SECRET:-}
       # LLM settings
       - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
@@ -217,16 +218,16 @@ services:
       - gtfs-network
     labels:
       - "traefik.enable=true"
-      # Kanban agent webhook routing
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.rule=Host(`${TEAM_SLUG}.${DOMAIN}`) && PathPrefix(`/kanban`)"
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.entrypoints=websecure"
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.tls=true"
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.service=kanban-${TEAM_SLUG}"
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.middlewares=kanban-${TEAM_SLUG}-strip,cors-headers@file"
+      # Kanban agent webhook routing (only /kanban/webhook path)
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.rule=Host(`${TEAM_SLUG}.${DOMAIN}`) && PathPrefix(`/kanban/webhook`)"
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.entrypoints=websecure"
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.tls=true"
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.service=kanban-agent-${TEAM_SLUG}"
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.middlewares=kanban-agent-${TEAM_SLUG}-strip,cors-headers@file"
       # Strip /kanban prefix before forwarding to the agent
-      - "traefik.http.middlewares.kanban-${TEAM_SLUG}-strip.stripprefix.prefixes=/kanban"
-      - "traefik.http.services.kanban-${TEAM_SLUG}.loadbalancer.server.port=8001"
+      - "traefik.http.middlewares.kanban-agent-${TEAM_SLUG}-strip.stripprefix.prefixes=/kanban"
+      - "traefik.http.services.kanban-agent-${TEAM_SLUG}.loadbalancer.server.port=8001"
     restart: unless-stopped
 
 networks:
