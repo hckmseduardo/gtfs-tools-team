@@ -7,6 +7,12 @@
 #   - TEAM_DB_PASSWORD: PostgreSQL password
 #   - TEAM_SECRET_KEY: Application secret key
 #   - CROSS_DOMAIN_SECRET: Cross-domain auth secret
+#
+# Sandbox mode (when SANDBOX_MODE=true):
+#   - SANDBOX_CODE_PATH: Path to cloned sandbox code
+#   - SANDBOX_BRANCH: Git branch name for the sandbox
+#   - Services build from local code instead of shared images
+#   - Kanban-agent targets the local code folder
 
 services:
   # Team's PostgreSQL with PostGIS
@@ -46,8 +52,10 @@ services:
       retries: 5
 
   # Team's Backend API
+  # In sandbox mode (SANDBOX_MODE=true), uses sandbox-specific image built from local code
+  # In normal mode, uses shared gtfs-team-api:latest image
   api:
-    image: gtfs-team-api:latest
+    image: ${SANDBOX_API_IMAGE:-gtfs-team-api:latest}
     container_name: gtfs-team-${TEAM_SLUG}-api
     environment:
       - TEAM_SLUG=${TEAM_SLUG}
@@ -102,8 +110,9 @@ services:
         condition: service_healthy
 
   # Team's Celery Worker
+  # Uses same image as API (sandbox-specific or shared)
   worker:
-    image: gtfs-team-api:latest
+    image: ${SANDBOX_API_IMAGE:-gtfs-team-api:latest}
     container_name: gtfs-team-${TEAM_SLUG}-worker
     command: celery -A app.tasks worker --loglevel=info --concurrency=2
     environment:
@@ -131,8 +140,9 @@ services:
         condition: service_healthy
 
   # Team's Celery Beat (scheduler)
+  # Uses same image as API (sandbox-specific or shared)
   beat:
-    image: gtfs-team-api:latest
+    image: ${SANDBOX_API_IMAGE:-gtfs-team-api:latest}
     container_name: gtfs-team-${TEAM_SLUG}-beat
     command: celery -A app.tasks beat --loglevel=info
     environment:
@@ -147,8 +157,10 @@ services:
       - worker
 
   # Team's Frontend
+  # In sandbox mode (SANDBOX_MODE=true), uses sandbox-specific image built from local code
+  # In normal mode, uses shared gtfs-team-web:latest image
   web:
-    image: gtfs-team-web:latest
+    image: ${SANDBOX_WEB_IMAGE:-gtfs-team-web:latest}
     container_name: gtfs-team-${TEAM_SLUG}-web
     environment:
       - VITE_API_URL=https://${TEAM_SLUG}.${DOMAIN}/api/v1
@@ -167,7 +179,8 @@ services:
       - "traefik.http.services.gtfs-${TEAM_SLUG}-web.loadbalancer.server.port=80"
     restart: unless-stopped
 
-  # Team's Kanban AI Agents
+  # Team's Kanban AI Agents (connects to external kanban.amazing-ai.tools)
+  # In sandbox mode, targets the local cloned code folder
   kanban-agent:
     build:
       context: ./kanban-agent
@@ -182,8 +195,12 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       # Team context
       - TEAM_SLUG=${TEAM_SLUG}
-      # Kanban API settings (webhook endpoint for this team)
-      - KANBAN_API_URL=https://${TEAM_SLUG}.${DOMAIN}/kanban
+      # Sandbox mode settings
+      - SANDBOX_MODE=${SANDBOX_MODE:-false}
+      - SANDBOX_BRANCH=${SANDBOX_BRANCH:-}
+      # Kanban API settings (external kanban service)
+      - KANBAN_API_URL=${KANBAN_API_URL:-https://gtfs-tools.kanban.amazing-ai.tools/api}
+      - KANBAN_API_TOKEN=${KANBAN_API_TOKEN:-}
       - KANBAN_WEBHOOK_SECRET=${KANBAN_WEBHOOK_SECRET:-}
       # LLM settings
       - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
@@ -192,7 +209,10 @@ services:
       # Provider-specific API keys
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ABACUS_API_KEY=${ABACUS_API_KEY:-}
+      - ABACUS_BASE_URL=${ABACUS_BASE_URL:-}
       # Target project path inside container
+      # In sandbox mode, this is the local cloned code folder
       - TARGET_PROJECT_PATH=/app/target-project
       # Server settings
       - HOST=0.0.0.0
@@ -204,10 +224,12 @@ services:
       - SSH_PORT=${SSH_PORT:-22}
       - SSH_USER=${SSH_USER}
       - SSH_KEY_PATH=/root/.ssh/id_ed25519
-      - SSH_HOST_PROJECT_PATH=${DATA_PATH}
+      # SSH host project path - uses sandbox code path in sandbox mode
+      - SSH_HOST_PROJECT_PATH=${SANDBOX_CODE_PATH:-${DATA_PATH}}
     volumes:
       # Mount the target project the agents will work on
-      - ${DATA_PATH}:/app/target-project:rw
+      # In sandbox mode, this is the local cloned code folder
+      - ${SANDBOX_CODE_PATH:-${DATA_PATH}}:/app/target-project:rw
       # Mount Claude CLI credentials (for Pro subscription)
       - ${HOME}/.claude:/root/.claude:ro
       # Mount SSH key for host command execution
@@ -217,16 +239,16 @@ services:
       - gtfs-network
     labels:
       - "traefik.enable=true"
-      # Kanban agent webhook routing
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.rule=Host(`${TEAM_SLUG}.${DOMAIN}`) && PathPrefix(`/kanban`)"
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.entrypoints=websecure"
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.tls=true"
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.service=kanban-${TEAM_SLUG}"
-      - "traefik.http.routers.kanban-${TEAM_SLUG}.middlewares=kanban-${TEAM_SLUG}-strip,cors-headers@file"
+      # Kanban agent webhook routing (only /kanban/webhook path)
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.rule=Host(`${TEAM_SLUG}.${DOMAIN}`) && PathPrefix(`/kanban/webhook`)"
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.entrypoints=websecure"
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.tls=true"
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.service=kanban-agent-${TEAM_SLUG}"
+      - "traefik.http.routers.kanban-agent-${TEAM_SLUG}.middlewares=kanban-agent-${TEAM_SLUG}-strip,cors-headers@file"
       # Strip /kanban prefix before forwarding to the agent
-      - "traefik.http.middlewares.kanban-${TEAM_SLUG}-strip.stripprefix.prefixes=/kanban"
-      - "traefik.http.services.kanban-${TEAM_SLUG}.loadbalancer.server.port=8001"
+      - "traefik.http.middlewares.kanban-agent-${TEAM_SLUG}-strip.stripprefix.prefixes=/kanban"
+      - "traefik.http.services.kanban-agent-${TEAM_SLUG}.loadbalancer.server.port=8001"
     restart: unless-stopped
 
 networks:

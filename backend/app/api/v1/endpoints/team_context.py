@@ -278,15 +278,38 @@ async def get_team_settings(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    """Get current team settings."""
+    """Get current team settings.
+
+    Settings (name, description, badge) are fetched from the portal since
+    they are shared across team and sandboxes.
+    """
     team = await get_current_team(db)
+
+    # Fetch settings from portal (source of truth)
+    portal_name = team.name
+    portal_description = team.description
+    portal_badge = None
+
+    if TEAM_SLUG:
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+                # Use the parent team slug (remove sandbox suffix if present)
+                parent_slug = TEAM_SLUG.split('-')[0] if '-' in TEAM_SLUG else TEAM_SLUG
+                response = await client.get(f"{PORTAL_API_URL}/teams/{parent_slug}")
+                if response.status_code == 200:
+                    portal_data = response.json()
+                    portal_name = portal_data.get("name") or team.name
+                    portal_description = portal_data.get("description") or team.description
+                    portal_badge = portal_data.get("badge")
+        except Exception as e:
+            logger.warning(f"Failed to fetch settings from portal: {e}")
 
     return {
         "id": team.id,
-        "name": team.name,
+        "name": portal_name,
         "slug": team.slug,
-        "description": team.description,
-        "badge": getattr(team, 'badge', None),
+        "description": portal_description,
+        "badge": portal_badge,
         "is_active": team.is_active,
         "created_at": team.created_at,
     }
@@ -299,7 +322,11 @@ async def update_team_settings(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    """Update team settings (name, description, badge)."""
+    """Update team settings (name, description, badge).
+
+    All settings are stored in the portal (shared across team and sandboxes).
+    The portal is the source of truth.
+    """
     team = await get_current_team(db)
     await require_team_owner(db, current_user, team)
 
@@ -307,12 +334,8 @@ async def update_team_settings(
     allowed_fields = {"name", "description", "badge"}
     update_data = {k: v for k, v in data.items() if k in allowed_fields}
 
-    # Apply updates
-    for field, value in update_data.items():
-        setattr(team, field, value)
-
-    await db.commit()
-    await db.refresh(team)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
 
     await create_audit_log(
         db=db,
@@ -325,25 +348,52 @@ async def update_team_settings(
         request=request,
     )
 
-    # Sync settings to portal so they're reflected in the dashboard
-    portal_sync_fields = {"name", "description", "badge"}
-    portal_update = {k: v for k, v in update_data.items() if k in portal_sync_fields}
-    if portal_update and TEAM_SLUG:
+    # Update settings in portal (source of truth for all settings)
+    # Use parent team slug so settings are shared across sandboxes
+    portal_name = team.name
+    portal_description = team.description
+    portal_badge = None
+
+    if TEAM_SLUG:
         try:
             async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
-                await client.post(
-                    f"{PORTAL_API_URL}/teams/{TEAM_SLUG}/sync-settings",
-                    json=portal_update,
+                parent_slug = TEAM_SLUG.split('-')[0] if '-' in TEAM_SLUG else TEAM_SLUG
+
+                response = await client.post(
+                    f"{PORTAL_API_URL}/teams/{parent_slug}/sync-settings",
+                    json=update_data,
                 )
+                if response.status_code == 200:
+                    logger.info(f"Settings synced to portal for team {parent_slug}")
+                else:
+                    logger.error(f"Failed to sync settings to portal: {response.status_code} - {response.text}")
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Failed to update settings in portal"
+                    )
+
+                # Fetch updated settings from portal
+                response = await client.get(f"{PORTAL_API_URL}/teams/{parent_slug}")
+                if response.status_code == 200:
+                    portal_data = response.json()
+                    portal_name = portal_data.get("name") or team.name
+                    portal_description = portal_data.get("description") or team.description
+                    portal_badge = portal_data.get("badge")
+        except HTTPException:
+            raise
         except Exception as e:
             logger.warning(f"Failed to sync settings to portal: {e}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to connect to portal: {str(e)}"
+            )
 
     return {
         "id": team.id,
-        "name": team.name,
+        "name": portal_name,
         "slug": team.slug,
-        "description": team.description,
-        "badge": getattr(team, 'badge', None),
+        "description": portal_description,
+        "badge": portal_badge,
         "is_active": team.is_active,
     }
 
