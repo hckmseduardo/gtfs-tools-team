@@ -1432,6 +1432,15 @@
     "schedule": {
       "stop": "Parada"
     },
+    "shape": {
+      "edit": "Editar Forma",
+      "duplicate": "Duplicar",
+      "new": "Nova Forma",
+      "load": "Carregar",
+      "newId": "Novo ID",
+      "selectShape": "Selecionar Forma",
+      "shapeLoaded": "Carregados {{count}} pontos da forma"
+    },
     "nextReview": "Próximo: Revisar e Criar"
   }
 }

@@ -1406,6 +1406,15 @@
     "schedule": {
       "stop": "Arrêt"
     },
+    "shape": {
+      "edit": "Modifier Tracé",
+      "duplicate": "Dupliquer",
+      "new": "Nouveau Tracé",
+      "load": "Charger",
+      "newId": "Nouvel ID",
+      "selectShape": "Sélectionner Tracé",
+      "shapeLoaded": "{{count}} points chargés depuis le tracé"
+    },
     "nextReview": "Suivant : Vérifier et Créer"
   }
 }

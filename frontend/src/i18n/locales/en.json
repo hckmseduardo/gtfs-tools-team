@@ -1568,6 +1568,15 @@
     "schedule": {
       "stop": "Stop"
     },
+    "shape": {
+      "edit": "Edit Shape",
+      "duplicate": "Duplicate",
+      "new": "New Shape",
+      "load": "Load",
+      "newId": "New ID",
+      "selectShape": "Select Shape",
+      "shapeLoaded": "Loaded {{count}} points from shape"
+    },
     "nextReview": "Next: Review & Create"
   }
 }

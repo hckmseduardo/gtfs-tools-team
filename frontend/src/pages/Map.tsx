@@ -33,6 +33,7 @@ import {
   SimpleGrid,
   Code,
   ColorInput,
+  Radio,
 } from '@mantine/core'
 import {
   IconBus,
@@ -57,6 +58,7 @@ import {
   IconWorld,
   IconWand,
   IconPencil,
+  IconDownload,
 } from '@tabler/icons-react'
 import { useMediaQuery, useDisclosure } from '@mantine/hooks'
 import { useForm } from '@mantine/form'
@@ -812,6 +814,13 @@ export default function MapPage() {
   const [rcAddPointMode, setRcAddPointMode] = useState(false)
   const [rcImproveSegmentMode, setRcImproveSegmentMode] = useState(false)
   const [rcImproveSelection, setRcImproveSelection] = useState<{ start: number | null; end: number | null }>({ start: null, end: null })
+  // Shape selection for existing routes
+  const [rcShapeMode, setRcShapeMode] = useState<'new' | 'existing' | 'duplicate'>('new')
+  const [rcRouteShapeIds, setRcRouteShapeIds] = useState<string[]>([])
+  const [rcAvailableShapes, setRcAvailableShapes] = useState<Array<{ shape_id: string; point_count: number }>>([])
+  const [rcSelectedShapeId, setRcSelectedShapeId] = useState<string | null>(null)
+  const [rcDuplicateShapeId, setRcDuplicateShapeId] = useState<string>('')
+  const [rcShapeLoading, setRcShapeLoading] = useState(false)
   const [rcTrips, setRcTrips] = useState<string[]>([])
   const [rcStopTimesTable, setRcStopTimesTable] = useState<Record<string, string[]>>({})
   const [rcStep, setRcStep] = useState<1 | 2 | 3 | 4 | 5 | 6 | 7>(1)
@@ -1299,6 +1308,13 @@ export default function MapPage() {
     setRcAddPointMode(false)
     setRcImproveSegmentMode(false)
     setRcImproveSelection({ start: null, end: null })
+    // Shape selection state
+    setRcShapeMode('new')
+    setRcRouteShapeIds([])
+    setRcAvailableShapes([])
+    setRcSelectedShapeId(null)
+    setRcDuplicateShapeId('')
+    setRcShapeLoading(false)
     setRcTrips([])
     setRcStopTimesTable({})
     setRcSelectedServiceIds([])
@@ -1402,6 +1418,18 @@ export default function MapPage() {
         return
       }
 
+      // Extract unique shape_ids from trips for shape selection
+      const uniqueShapeIds = [...new Set(
+        tripsResponse.items
+          .filter(trip => trip.shape_id)
+          .map(trip => trip.shape_id as string)
+      )]
+      setRcRouteShapeIds(uniqueShapeIds)
+      // Reset shape mode when loading new route
+      setRcShapeMode('new')
+      setRcSelectedShapeId(null)
+      setRcDuplicateShapeId('')
+
       // Collect all stop_times from all trips
       // Use a Map to track: stop_id -> { sequences: number[], count: number }
       const stopSequenceMap = new Map<string, { sequences: number[], count: number }>()
@@ -1468,17 +1496,21 @@ export default function MapPage() {
         }
       }
 
-      // Map to RCSelectedStop objects
+      // Map to RCSelectedStop objects, filtering out stops with invalid coordinates
       const selectedStops: RCSelectedStop[] = orderedStopIds
         .map((stopId, index) => {
           const stop = stops.find(s => s.stop_id === stopId)
           if (!stop) return null
+          const lat = parseFloat(String(stop.stop_lat))
+          const lon = parseFloat(String(stop.stop_lon))
+          // Skip stops with truly invalid coordinates (NaN)
+          if (isNaN(lat) || isNaN(lon)) return null
           return {
             stop_id: stopId,
             stop_code: stop.stop_code,
             stop_name: stop.stop_name || stopId,
-            lat: parseFloat(String(stop.stop_lat)) || 0,
-            lon: parseFloat(String(stop.stop_lon)) || 0,
+            lat,
+            lon,
             isNew: false,
             pass: 1,
             sequence: index + 1,
@@ -1919,6 +1951,61 @@ export default function MapPage() {
       })
     } finally {
       setRcShapeGenerating(false)
+    }
+  }
+
+  // Load shape points from an existing shape into the route creator
+  const handleLoadExistingShape = async (shapeId: string) => {
+    if (!selectedFeed) return
+
+    setRcShapeLoading(true)
+    try {
+      console.log('[Shape Load] Loading shape:', shapeId, 'for feed:', selectedFeed)
+      const result = await shapesApi.getByShapeId({
+        feed_id: parseInt(selectedFeed),
+        shape_ids: shapeId
+      })
+      console.log('[Shape Load] API result:', result)
+      console.log('[Shape Load] Items count:', result.items.length)
+      if (result.items.length > 0) {
+        const shape = result.items[0]
+        console.log('[Shape Load] Shape:', shape.shape_id, 'Points count:', shape.points?.length)
+        if (shape.points?.length > 0) {
+          console.log('[Shape Load] First point:', shape.points[0])
+        }
+        // Sort by sequence and filter out points with truly invalid coordinates (null/undefined/NaN)
+        // API returns points with lat/lon/sequence (not shape_pt_lat/shape_pt_lon/shape_pt_sequence)
+        const sortedPoints = [...(shape.points || [])]
+          .sort((a, b) => (a.sequence ?? a.shape_pt_sequence ?? 0) - (b.sequence ?? b.shape_pt_sequence ?? 0))
+          .filter(p => {
+            const lat = p.lat ?? p.shape_pt_lat
+            const lon = p.lon ?? p.shape_pt_lon
+            return lat != null && lon != null && !isNaN(Number(lat)) && !isNaN(Number(lon))
+          })
+        console.log('[Shape Load] Sorted/filtered points count:', sortedPoints.length)
+        setRcShapePoints(sortedPoints.map(p => ({ lat: Number(p.lat ?? p.shape_pt_lat), lon: Number(p.lon ?? p.shape_pt_lon) })))
+        notifications.show({
+          title: t('common.success', 'Success'),
+          message: t('routeCreator.shape.shapeLoaded', { count: sortedPoints.length, defaultValue: `Loaded ${sortedPoints.length} points from shape ${shapeId}` }),
+          color: 'green'
+        })
+      } else {
+        console.log('[Shape Load] No items returned from API')
+        notifications.show({
+          title: t('common.warning', 'Warning'),
+          message: `Shape ${shapeId} not found`,
+          color: 'yellow'
+        })
+      }
+    } catch (error: any) {
+      console.error('Failed to load shape:', error)
+      notifications.show({
+        title: t('common.error', 'Error'),
+        message: error?.message || 'Failed to load shape',
+        color: 'red'
+      })
+    } finally {
+      setRcShapeLoading(false)
     }
   }
 
@@ -2648,7 +2735,13 @@ export default function MapPage() {
       // No mapping available, can't determine orphans
       return []
     }
-    return stops.filter(stop => !stopsInRoutes.has(stop.stop_id))
+    // Filter orphan stops and also exclude those with invalid coordinates
+    return stops.filter(stop => {
+      if (stopsInRoutes.has(stop.stop_id)) return false
+      const lat = Number(stop.stop_lat)
+      const lon = Number(stop.stop_lon)
+      return !isNaN(lat) && !isNaN(lon) && lat !== 0 && lon !== 0
+    })
   }, [stops, stopsInRoutes, routeToStopsMap])
 
   // Filter stops based on selected routes using routeToStopsMap (excludes orphan stops - they're rendered separately)
@@ -2685,12 +2778,21 @@ export default function MapPage() {
 
     // Note: Orphan stops are NOT included here - they're rendered separately with their own toggle
 
-    console.log('[Map Filter] Filtered stops:', {
-      input: stops.length,
-      output: result.length,
+    // Filter out stops with invalid coordinates (undefined, null, or NaN)
+    const validResult = result.filter(stop => {
+      const lat = Number(stop.stop_lat)
+      const lon = Number(stop.stop_lon)
+      return !isNaN(lat) && !isNaN(lon) && lat !== 0 && lon !== 0
     })
 
-    return result
+    console.log('[Map Filter] Filtered stops:', {
+      input: stops.length,
+      beforeValidation: result.length,
+      output: validResult.length,
+      invalidCount: result.length - validResult.length,
+    })
+
+    return validResult
   }, [stops, selectedRouteIds, routeToStopsMap])
 
   // Default color palette for routes without GTFS colors
@@ -2924,6 +3026,26 @@ export default function MapPage() {
   useEffect(() => {
     loadCalendars()
   }, [loadCalendars])
+
+  // Fetch shape details when route shapes are identified (for route creator)
+  useEffect(() => {
+    if (rcRouteShapeIds.length > 0 && selectedFeed) {
+      shapesApi.getByShapeId({
+        feed_id: parseInt(selectedFeed),
+        shape_ids: rcRouteShapeIds.join(',')
+      }).then(result => {
+        setRcAvailableShapes(result.items.map(s => ({
+          shape_id: s.shape_id,
+          point_count: s.points.length
+        })))
+      }).catch(err => {
+        console.error('Failed to fetch route shapes:', err)
+        setRcAvailableShapes([])
+      })
+    } else {
+      setRcAvailableShapes([])
+    }
+  }, [rcRouteShapeIds, selectedFeed])
 
   const loadAgencies = async () => {
     try {
@@ -3944,6 +4066,62 @@ export default function MapPage() {
                         />
                       )}
 
+                      {/* Shape selection UI - compact design */}
+                      {rcUseExistingRoute && rcSelectedExistingRouteId && (rcSelectedDirection || rcAvailableDirections.length <= 1) && rcAvailableShapes.length > 0 && (
+                        <>
+                          <SegmentedControl
+                            fullWidth
+                            size="xs"
+                            value={rcShapeMode}
+                            onChange={(v) => setRcShapeMode(v as 'new' | 'existing' | 'duplicate')}
+                            data={[
+                              { label: t('routeCreator.shape.edit', 'Edit Shape'), value: 'existing' },
+                              { label: t('routeCreator.shape.duplicate', 'Duplicate'), value: 'duplicate' },
+                              { label: t('routeCreator.shape.new', 'New Shape'), value: 'new' },
+                            ]}
+                          />
+
+                          {/* Shape selector with load button inline */}
+                          {(rcShapeMode === 'existing' || rcShapeMode === 'duplicate') && (
+                            <Group gap="xs" align="flex-end">
+                              <Select
+                                style={{ flex: 1 }}
+                                size="sm"
+                                placeholder={t('routeCreator.shape.selectShape', 'Select Shape')}
+                                data={rcAvailableShapes.map(s => ({
+                                  value: s.shape_id,
+                                  label: `${s.shape_id} (${s.point_count} pts)`
+                                }))}
+                                value={rcSelectedShapeId}
+                                onChange={setRcSelectedShapeId}
+                                searchable
+                                comboboxProps={{ zIndex: 100001 }}
+                              />
+                              {rcShapeMode === 'duplicate' && (
+                                <TextInput
+                                  style={{ flex: 1 }}
+                                  size="sm"
+                                  placeholder={t('routeCreator.shape.newId', 'New ID')}
+                                  value={rcDuplicateShapeId}
+                                  onChange={(e) => setRcDuplicateShapeId(e.currentTarget.value)}
+                                />
+                              )}
+                              {rcSelectedShapeId && (
+                                <Button
+                                  color="indigo"
+                                  size="sm"
+                                  onClick={() => handleLoadExistingShape(rcSelectedShapeId)}
+                                  leftSection={<IconDownload size={14} />}
+                                  loading={rcShapeLoading}
+                                >
+                                  {t('routeCreator.shape.load', 'Load')}
+                                </Button>
+                              )}
+                            </Group>
+                          )}
+                        </>
+                      )}
+
                       {/* Route details - editable for new, read-only display for existing */}
                       {!rcUseExistingRoute && (
                         <SimpleGrid cols={2} spacing="sm">
@@ -4137,6 +4315,7 @@ export default function MapPage() {
                         {t('routeCreator.shape.points', { defaultValue: '{{count}} pts', count: rcShapePoints.length } as any)}
                       </Badge>
                     </Group>
+
                     <Text size="sm" c="dimmed" mb="xs">
                       {t('routeCreator.shape.instructions', 'Generate from Valhalla or edit manually. Drag point markers to move. Use Improve Segment to re-route between two points.')}
                     </Text>
@@ -4691,7 +4870,13 @@ export default function MapPage() {
             })}
 
             {/* Route Creator - in-memory new stops (draggable) */}
-            {routeCreatorEnabled && rcNewStops.map((stop, idx) => {
+            {routeCreatorEnabled && rcNewStops
+              .filter(stop => {
+                const lat = Number(stop.lat)
+                const lon = Number(stop.lon)
+                return !isNaN(lat) && !isNaN(lon)
+              })
+              .map((stop, idx) => {
               const rcLabel = rcSelectionLabels.get(stop.stop_id) || String(rcOrderedStops.findIndex(s => s.stop_id === stop.stop_id) + 1) || '?'
               return (
                 // @ts-ignore - react-leaflet v4 type definitions issue
@@ -4733,7 +4918,7 @@ export default function MapPage() {
               )
             })}
 
-            {/* Route Creator Shape (in-memory) */}
+            {/* Route Creator Shape (in-memory) - points already filtered during loading */}
             {routeCreatorEnabled && rcShapePoints.length > 0 && (
               <>
                 <Polyline
@@ -5939,26 +6124,174 @@ export default function MapPage() {
                 {rcStep === 2 && (
                   <>
                     {/* Route Selection - Step 2 */}
-                    <SimpleGrid cols={2} spacing="sm">
-                      <TextInput
-                        label={t('routeCreator.routeId', 'Route ID')}
-                        value={rcRouteId}
-                        onChange={(e) => setRcRouteId(e.currentTarget.value)}
-                        placeholder="RC_ROUTE_1"
+                    <SegmentedControl
+                      fullWidth
+                      size="sm"
+                      value={rcUseExistingRoute ? 'existing' : 'new'}
+                      onChange={(value) => {
+                        const useExisting = value === 'existing'
+                        setRcUseExistingRoute(useExisting)
+                        if (!useExisting) {
+                          setRcSelectedExistingRouteId(null)
+                          setRcSelectedDirection(null)
+                          setRcAvailableDirections([])
+                          setRcRouteId(generateRouteIdSuggestion())
+                          setRcRouteShortName('')
+                          setRcRouteColor('#0ea5e9')
+                          setRcSelectedStops([])
+                        }
+                      }}
+                      data={[
+                        { label: t('routeCreator.newRoute', 'New Route'), value: 'new' },
+                        { label: t('routeCreator.existingRoute', 'Existing Route'), value: 'existing' },
+                      ]}
+                    />
+
+                    {/* Existing route selector */}
+                    {rcUseExistingRoute && (
+                      <Select
+                        label={t('routeCreator.selectRoute', 'Select Route')}
+                        placeholder={t('routeCreator.selectRoutePlaceholder', 'Choose a route...')}
+                        searchable
+                        clearable
+                        value={rcSelectedExistingRouteId}
+                        onChange={(value) => {
+                          setRcSelectedExistingRouteId(value)
+                          if (value) {
+                            loadExistingRouteDirections(value)
+                          } else {
+                            setRcSelectedDirection(null)
+                            setRcAvailableDirections([])
+                            setRcSelectedStops([])
+                            setRcRouteId('')
+                            setRcRouteShortName('')
+                            setRcRouteColor('#0ea5e9')
+                          }
+                        }}
+                        data={routes.map(r => ({
+                          value: r.route_id,
+                          label: `${r.route_short_name || r.route_id}${r.route_long_name ? ` - ${r.route_long_name}` : ''}`,
+                        }))}
+                        rightSection={rcLoadingExistingRoute ? <Loader size="xs" /> : null}
+                        comboboxProps={{ zIndex: 100001 }}
                       />
-                      <TextInput
-                        label={t('routeCreator.shortName', 'Short Name')}
-                        value={rcRouteShortName}
-                        onChange={(e) => setRcRouteShortName(e.currentTarget.value)}
-                        placeholder={t('routeCreator.shortNamePlaceholder', 'Express')}
+                    )}
+
+                    {/* Direction selector - shown after route is selected */}
+                    {rcUseExistingRoute && rcSelectedExistingRouteId && rcAvailableDirections.length > 1 && (
+                      <Select
+                        label={t('routeCreator.selectDirection', 'Select Direction')}
+                        placeholder={t('routeCreator.selectDirectionPlaceholder', 'Choose a direction...')}
+                        value={rcSelectedDirection}
+                        onChange={(value) => {
+                          setRcSelectedDirection(value)
+                          if (value && rcSelectedExistingRouteId) {
+                            loadExistingRouteStops(rcSelectedExistingRouteId, parseInt(value))
+                          } else {
+                            setRcSelectedStops([])
+                          }
+                        }}
+                        data={rcAvailableDirections}
+                        rightSection={rcLoadingExistingRoute ? <Loader size="xs" /> : null}
+                        comboboxProps={{ zIndex: 100001 }}
                       />
-                    </SimpleGrid>
+                    )}
+
+                    {/* Shape selection UI - compact design */}
+                    {rcUseExistingRoute && rcSelectedExistingRouteId && (rcSelectedDirection || rcAvailableDirections.length <= 1) && rcAvailableShapes.length > 0 && (
+                      <>
+                        <SegmentedControl
+                          fullWidth
+                          size="xs"
+                          value={rcShapeMode}
+                          onChange={(v) => setRcShapeMode(v as 'new' | 'existing' | 'duplicate')}
+                          data={[
+                            { label: t('routeCreator.shape.edit', 'Edit Shape'), value: 'existing' },
+                            { label: t('routeCreator.shape.duplicate', 'Duplicate'), value: 'duplicate' },
+                            { label: t('routeCreator.shape.new', 'New Shape'), value: 'new' },
+                          ]}
+                        />
+
+                        {/* Shape selector with load button */}
+                        {(rcShapeMode === 'existing' || rcShapeMode === 'duplicate') && (
+                          <Stack gap="xs">
+                            <Group gap="xs" align="flex-end">
+                              <Select
+                                style={{ flex: 1 }}
+                                size="sm"
+                                placeholder={t('routeCreator.shape.selectShape', 'Select Shape')}
+                                data={rcAvailableShapes.map(s => ({
+                                  value: s.shape_id,
+                                  label: `${s.shape_id} (${s.point_count} pts)`
+                                }))}
+                                value={rcSelectedShapeId}
+                                onChange={setRcSelectedShapeId}
+                                searchable
+                                comboboxProps={{ zIndex: 100001 }}
+                              />
+                              {rcSelectedShapeId && (
+                                <Button
+                                  color="indigo"
+                                  size="sm"
+                                  onClick={() => handleLoadExistingShape(rcSelectedShapeId)}
+                                  leftSection={<IconDownload size={14} />}
+                                  loading={rcShapeLoading}
+                                >
+                                  {t('routeCreator.shape.load', 'Load')}
+                                </Button>
+                              )}
+                            </Group>
+                            {rcShapeMode === 'duplicate' && (
+                              <TextInput
+                                size="sm"
+                                placeholder={t('routeCreator.shape.newId', 'New ID')}
+                                value={rcDuplicateShapeId}
+                                onChange={(e) => setRcDuplicateShapeId(e.currentTarget.value)}
+                              />
+                            )}
+                          </Stack>
+                        )}
+                      </>
+                    )}
+
+                    {/* Route details - editable for new, read-only display for existing */}
+                    {!rcUseExistingRoute && (
+                      <SimpleGrid cols={2} spacing="sm">
+                        <TextInput
+                          label={t('routeCreator.routeId', 'Route ID')}
+                          value={rcRouteId}
+                          onChange={(e) => setRcRouteId(e.currentTarget.value)}
+                          placeholder="RC_ROUTE_1"
+                        />
+                        <TextInput
+                          label={t('routeCreator.shortName', 'Short Name')}
+                          value={rcRouteShortName}
+                          onChange={(e) => setRcRouteShortName(e.currentTarget.value)}
+                          placeholder={t('routeCreator.shortNamePlaceholder', 'Express')}
+                        />
+                      </SimpleGrid>
+                    )}
+
+                    {rcUseExistingRoute && rcSelectedExistingRouteId && (rcSelectedDirection || rcAvailableDirections.length <= 1) && (
+                      <Group gap="xs">
+                        <Badge color="blue" variant="light" size="lg">
+                          {rcRouteShortName || rcRouteId}
+                        </Badge>
+                        {rcSelectedStops.length > 0 && (
+                          <Badge color="green" variant="dot">
+                            {t('routeCreator.stopsPreloaded', { count: rcSelectedStops.length }, `${rcSelectedStops.length} stops loaded`)}
+                          </Badge>
+                        )}
+                      </Group>
+                    )}
+
                     <ColorInput
                       label={t('routeCreator.routeColor', 'Route Color')}
                       value={rcRouteColor}
                       onChange={setRcRouteColor}
                       format="hex"
                       swatches={['#0ea5e9', '#10b981', '#f97316', '#ef4444', '#8b5cf6']}
+                      disabled={rcUseExistingRoute}
                     />
 
                     <Group mt="sm" gap="xs">
@@ -6083,6 +6416,7 @@ export default function MapPage() {
                       {t('routeCreator.shape.points', { defaultValue: '{{count}} pts', count: rcShapePoints.length } as any)}
                     </Badge>
                   </Group>
+
                   <Text size="sm" c="dimmed" mb="xs">
                     {t('routeCreator.shape.instructions', 'Generate from Valhalla or edit manually. Drag point markers to move. Use Improve Segment to re-route between two points.')}
                   </Text>
