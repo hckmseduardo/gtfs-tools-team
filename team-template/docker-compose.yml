@@ -226,6 +226,8 @@ services:
       - SSH_KEY_PATH=/root/.ssh/id_ed25519
       # SSH host project path - uses sandbox code path in sandbox mode
       - SSH_HOST_PROJECT_PATH=${SANDBOX_CODE_PATH:-${DATA_PATH}}
+      # Command forwarding - POST to webhook instead of executing (for n8n integration)
+      - COMMAND_WEBHOOK_URL=${COMMAND_WEBHOOK_URL:-}
     volumes:
       # Mount the target project the agents will work on
       # In sandbox mode, this is the local cloned code folder
