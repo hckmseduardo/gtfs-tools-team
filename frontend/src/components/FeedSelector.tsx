@@ -10,6 +10,7 @@ interface FeedSelectorProps {
   value: string | null
   onChange: (feedId: string | null) => void
   onFeedsLoaded?: (feeds: GTFSFeed[]) => void
+  onLoadingChange?: (loading: boolean) => void
   showAllOption?: boolean
   disabled?: boolean
   style?: React.CSSProperties
@@ -21,6 +22,7 @@ export default function FeedSelector({
   value,
   onChange,
   onFeedsLoaded,
+  onLoadingChange,
   showAllOption = true,
   disabled = false,
   style,
@@ -41,6 +43,7 @@ export default function FeedSelector({
 
   const loadFeeds = async (agencyId: number) => {
     setLoading(true)
+    onLoadingChange?.(true)
     try {
       const agencyFeeds = await feedApi.getByAgency(agencyId, true) // Only active feeds
       setFeeds(agencyFeeds)
@@ -78,6 +81,7 @@ export default function FeedSelector({
       })
     } finally {
       setLoading(false)
+      onLoadingChange?.(false)
     }
   }
 

@@ -721,6 +721,7 @@ export default function MapPage() {
   const [agencies, setAgencies] = useState<Agency[]>([])
   const [selectedAgency, setSelectedAgency] = useState<number | null>(null)
   const [selectedFeed, setSelectedFeed] = useState<string | null>(null)
+  const [feedsLoading, setFeedsLoading] = useState(false)
   const [stops, setStops] = useState<Stop[]>([])
   const [routes, setRoutes] = useState<Route[]>([])
   const [shapes, setShapes] = useState<RouteShape[]>([])
@@ -2959,9 +2960,11 @@ export default function MapPage() {
   useEffect(() => {
     if (selectedFeed) {
       loadGTFSDataByFeed(parseInt(selectedFeed))
-    } else if (selectedAgency) {
+    } else if (selectedAgency && !feedsLoading) {
+      // Only call loadGTFSDataByAgency when feeds have finished loading
+      // This prevents the false "Feed Selection Required" warning during initial load
       loadGTFSDataByAgency(selectedAgency)
-    } else {
+    } else if (!selectedAgency) {
       setStops([])
       setRoutes([])
       setShapes([])
@@ -2969,7 +2972,7 @@ export default function MapPage() {
       setSelectedRouteIds(new Set())
       setSelectedShapeIds(new Set())
     }
-  }, [selectedFeed, selectedAgency])
+  }, [selectedFeed, selectedAgency, feedsLoading])
 
   // Get available routes (routes that have trips in selected calendars)
   const availableRoutes = useMemo(() => {
@@ -3074,7 +3077,9 @@ export default function MapPage() {
     setTrips([])
     setSelectedRouteIds(new Set())
     setSelectedShapeIds(new Set())
-    if (!selectedFeed) {
+    // Only show the notification if feeds have finished loading and no feed is selected
+    // This prevents the false warning during initial load when FeedSelector is still loading
+    if (!selectedFeed && !feedsLoading) {
       notifications.show({
         title: t('map.feedSelectionRequired', 'Feed Selection Required'),
         message: t('map.selectFeedToViewMap', 'Please select a specific feed to view map data'),
@@ -3493,6 +3498,7 @@ export default function MapPage() {
           agencyId={selectedAgency}
           value={selectedFeed}
           onChange={setSelectedFeed}
+          onLoadingChange={setFeedsLoading}
           showAllOption={!editMode}
         />
       </Stack>
@@ -3805,6 +3811,7 @@ export default function MapPage() {
                   agencyId={selectedAgency}
                   value={selectedFeed}
                   onChange={setSelectedFeed}
+                  onLoadingChange={setFeedsLoading}
                   showAllOption={!editMode}
                   style={{ minWidth: 300 }}
                 />
