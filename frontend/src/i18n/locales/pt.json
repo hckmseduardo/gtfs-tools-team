@@ -856,6 +856,10 @@
       "propagatedDelay": "Atraso Propagado",
       "serviceDates": "Datas de Serviço",
       "noModifications": "Nenhuma modificação de viagem ativa"
+    },
+    "shapes": {
+      "points": "pontos",
+      "noValidPoints": "O trajeto não contém pontos de coordenadas válidos"
     }
   },
   "validation": {
@@ -1439,7 +1443,9 @@
       "load": "Carregar",
       "newId": "Novo ID",
       "selectShape": "Selecionar Forma",
-      "shapeLoaded": "Carregados {{count}} pontos da forma"
+      "shapeLoaded": "Carregados {{count}} pontos da forma",
+      "shapeLoadedWithWarning": "Carregados {{count}} pontos da forma ({{skipped}} pontos inválidos ignorados)",
+      "noValidCoordinates": "A forma não contém coordenadas válidas"
     },
     "nextReview": "Próximo: Revisar e Criar"
   }

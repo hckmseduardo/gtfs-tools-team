@@ -157,6 +157,17 @@ const createDraggableStopIcon = (isAffected: boolean = false) => {
   })
 }
 
+// Helper to validate a coordinate point has valid lat/lon numbers
+const isValidCoordinate = (point: { lat?: number; lon?: number } | null | undefined): point is { lat: number; lon: number } => {
+  if (!point) return false
+  const lat = point.lat
+  const lon = point.lon
+  return typeof lat === 'number' && typeof lon === 'number' &&
+         !isNaN(lat) && !isNaN(lon) &&
+         isFinite(lat) && isFinite(lon) &&
+         lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+}
+
 // Route Creator shape point icon
 const createRouteCreatorPointIcon = (index: number) => {
   // Small, blank square slightly smaller than the 6px route stroke
@@ -1970,25 +1981,57 @@ export default function MapPage() {
       console.log('[Shape Load] Items count:', result.items.length)
       if (result.items.length > 0) {
         const shape = result.items[0]
-        console.log('[Shape Load] Shape:', shape.shape_id, 'Points count:', shape.points?.length)
+        const rawPointCount = shape.points?.length || 0
+        console.log('[Shape Load] Shape:', shape.shape_id, 'Points count:', rawPointCount)
         if (shape.points?.length > 0) {
           console.log('[Shape Load] First point:', shape.points[0])
         }
-        // Sort by sequence and filter out points with truly invalid coordinates (null/undefined/NaN)
-        // API returns points with lat/lon/sequence (not shape_pt_lat/shape_pt_lon/shape_pt_sequence)
+
+        // Sort by sequence first
         const sortedPoints = [...(shape.points || [])]
-          .sort((a, b) => (a.sequence ?? a.shape_pt_sequence ?? 0) - (b.sequence ?? b.shape_pt_sequence ?? 0))
-          .filter(p => {
-            const lat = p.lat ?? p.shape_pt_lat
-            const lon = p.lon ?? p.shape_pt_lon
-            return lat != null && lon != null && !isNaN(Number(lat)) && !isNaN(Number(lon))
+          .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
+
+        // Convert to standard { lat, lon } format and validate coordinates
+        const convertedPoints = sortedPoints.map(p => ({
+          lat: Number(p.lat),
+          lon: Number(p.lon)
+        }))
+
+        // Filter to only valid coordinates using the isValidCoordinate helper
+        const validPoints = convertedPoints.filter(isValidCoordinate)
+
+        console.log('[Shape Load] Sorted/converted points:', sortedPoints.length, 'Valid points:', validPoints.length)
+
+        if (validPoints.length === 0) {
+          console.warn('[Shape Load] No valid coordinate points found in shape')
+          notifications.show({
+            title: t('common.error', 'Error'),
+            message: `Shape ${shapeId} contains no valid coordinates`,
+            color: 'red'
           })
-        console.log('[Shape Load] Sorted/filtered points count:', sortedPoints.length)
-        setRcShapePoints(sortedPoints.map(p => ({ lat: Number(p.lat ?? p.shape_pt_lat), lon: Number(p.lon ?? p.shape_pt_lon) })))
+          return
+        }
+
+        // Warn if some points were filtered out
+        const invalidCount = rawPointCount - validPoints.length
+        if (invalidCount > 0) {
+          console.warn('[Shape Load] Filtered out', invalidCount, 'invalid points')
+        }
+
+        setRcShapePoints(validPoints)
         notifications.show({
           title: t('common.success', 'Success'),
-          message: t('routeCreator.shape.shapeLoaded', { count: sortedPoints.length, defaultValue: `Loaded ${sortedPoints.length} points from shape ${shapeId}` }),
-          color: 'green'
+          message: invalidCount > 0
+            ? t('routeCreator.shape.shapeLoadedWithWarning', {
+                count: validPoints.length,
+                skipped: invalidCount,
+                defaultValue: `Loaded ${validPoints.length} points from shape ${shapeId} (${invalidCount} invalid points skipped)`
+              })
+            : t('routeCreator.shape.shapeLoaded', {
+                count: validPoints.length,
+                defaultValue: `Loaded ${validPoints.length} points from shape ${shapeId}`
+              }),
+          color: invalidCount > 0 ? 'yellow' : 'green'
         })
       } else {
         console.log('[Shape Load] No items returned from API')
@@ -2245,15 +2288,27 @@ export default function MapPage() {
     if (!shape) return
 
     setEditingShapeId(shapeId)
-    setEditingShapePoints(
-      shape.points.map((p, idx) => ({
-        lat: p.lat,
-        lon: p.lon,
-        sequence: p.shape_pt_sequence || idx
+    // Filter out points with invalid coordinates to prevent Leaflet errors
+    const validPoints = shape.points
+      .map((p, idx) => ({
+        lat: Number(p.lat),
+        lon: Number(p.lon),
+        sequence: p.sequence ?? idx
       }))
-    )
+      .filter(p => isValidCoordinate({ lat: p.lat, lon: p.lon }))
+
+    if (validPoints.length === 0) {
+      notifications.show({
+        title: t('common.error', 'Error'),
+        message: t('map.shapes.noValidPoints', 'Shape has no valid coordinate points'),
+        color: 'red'
+      })
+      return
+    }
+
+    setEditingShapePoints(validPoints)
     setCreatingNewShape(false)
-  }, [shapes])
+  }, [shapes, t])
 
   const handleStartCreateShape = useCallback(() => {
     setCreatingNewShape(true)
@@ -2882,6 +2937,11 @@ export default function MapPage() {
   const canGoToShape = rcOrderedStops.length >= 2
   const canGoToSchedule = rcShapePoints.length >= 2 && rcOrderedStops.length >= 2
   const canGoToStopTimes = rcTrips.length > 0 && Object.keys(rcStopTimesTable).length > 0
+
+  // Validated shape points for safe rendering - filters out any invalid coordinates
+  const validatedRcShapePoints = useMemo(() => {
+    return rcShapePoints.filter(isValidCoordinate)
+  }, [rcShapePoints])
 
   // Reset shape-add mode when leaving shape step
   useEffect(() => {
@@ -4925,11 +4985,11 @@ export default function MapPage() {
               )
             })}
 
-            {/* Route Creator Shape (in-memory) - points already filtered during loading */}
-            {routeCreatorEnabled && rcShapePoints.length > 0 && (
+            {/* Route Creator Shape (in-memory) - uses validated points to prevent Leaflet errors */}
+            {routeCreatorEnabled && validatedRcShapePoints.length > 0 && (
               <>
                 <Polyline
-                  positions={rcShapePoints.map(p => [p.lat, p.lon] as [number, number])}
+                  positions={validatedRcShapePoints.map(p => [p.lat, p.lon] as [number, number])}
                   pathOptions={{
                     color: '#0ea5e9',
                     weight: 6,
@@ -4947,7 +5007,7 @@ export default function MapPage() {
                 />
                 {rcImproveSelection.start !== null && rcImproveSelection.end !== null && rcImproveSelection.end > rcImproveSelection.start && (
                   <Polyline
-                    positions={rcShapePoints.slice(rcImproveSelection.start, rcImproveSelection.end + 1).map(p => [p.lat, p.lon] as [number, number])}
+                    positions={validatedRcShapePoints.slice(rcImproveSelection.start, rcImproveSelection.end + 1).map(p => [p.lat, p.lon] as [number, number])}
                     pathOptions={{
                       color: '#f59e0b',
                       weight: 8,
@@ -4955,7 +5015,7 @@ export default function MapPage() {
                     }}
                   />
                 )}
-                {rcShapePoints.map((point, idx) => (
+                {validatedRcShapePoints.map((point, idx) => (
                   // @ts-ignore - react-leaflet v4 type definitions issue
                   <Marker
                     key={`rc-shape-${idx}`}
@@ -4980,10 +5040,10 @@ export default function MapPage() {
                     <Popup>
                       <Text fw={600} size="sm">Shape Point {idx + 1}</Text>
                       <Text size="xs" c="dimmed">
-                        {(point.lat ?? 0).toFixed(6)}, {(point.lon ?? 0).toFixed(6)}
+                        {point.lat.toFixed(6)}, {point.lon.toFixed(6)}
                       </Text>
                       <Group gap="xs" mt="xs">
-                        <Button size="xs" color="red" variant="light" disabled={rcShapePoints.length <= 2} onClick={() => handleRCRemovePoint(idx)}>
+                        <Button size="xs" color="red" variant="light" disabled={validatedRcShapePoints.length <= 2} onClick={() => handleRCRemovePoint(idx)}>
                           Remove
                         </Button>
                         {rcImproveSegmentMode && (
@@ -5011,10 +5071,22 @@ export default function MapPage() {
               const isShapesEditMode = editMode && editorMode === 'shapes'
               const isEditingThis = editingShapeId === shape.shape_id
 
-              // Use edited points if this shape is being edited
+              // Filter shape points to only include valid coordinates (prevent Leaflet errors)
+              const validShapePoints = shape.points
+                .map(p => ({ lat: Number(p.lat), lon: Number(p.lon) }))
+                .filter(isValidCoordinate)
+
+              // Skip rendering if no valid points after filtering
+              if (validShapePoints.length === 0) {
+                return null
+              }
+
+              // Use edited points if this shape is being edited, otherwise use validated shape points
               const positions = isEditingThis && editingShapePoints.length > 0
-                ? editingShapePoints.map(p => [p.lat, p.lon] as [number, number])
-                : shape.points.map(p => [p.lat, p.lon] as [number, number])
+                ? editingShapePoints
+                    .filter(p => isValidCoordinate({ lat: p.lat, lon: p.lon }))
+                    .map(p => [p.lat, p.lon] as [number, number])
+                : validShapePoints.map(p => [p.lat, p.lon] as [number, number])
 
               // Use GTFS route_color if available, otherwise use default color palette
               let color = shapeColorMap[shape.shape_id] || defaultRouteColors[index % defaultRouteColors.length]
@@ -5057,6 +5129,11 @@ export default function MapPage() {
 
                   {/* Shape waypoint markers - only show when editing */}
                   {isEditingThis && isShapesEditMode && editingShapePoints.map((point, idx) => {
+                    // Skip invalid coordinates to prevent Leaflet errors
+                    if (!isValidCoordinate({ lat: point.lat, lon: point.lon })) {
+                      return null
+                    }
+
                     const waypointIcon = L.divIcon({
                       className: 'shape-waypoint-marker',
                       html: `<div style="
@@ -5120,6 +5197,12 @@ export default function MapPage() {
                     if (idx === editingShapePoints.length - 1) return null // No midpoint after last point
 
                     const nextPoint = editingShapePoints[idx + 1]
+                    // Skip if either point has invalid coordinates
+                    if (!isValidCoordinate({ lat: point.lat, lon: point.lon }) ||
+                        !isValidCoordinate({ lat: nextPoint.lat, lon: nextPoint.lon })) {
+                      return null
+                    }
+
                     const midLat = (point.lat + nextPoint.lat) / 2
                     const midLon = (point.lon + nextPoint.lon) / 2
 

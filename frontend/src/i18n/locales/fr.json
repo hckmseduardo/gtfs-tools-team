@@ -830,6 +830,10 @@
       "propagatedDelay": "Retard propagé",
       "serviceDates": "Dates de service",
       "noModifications": "Aucune modification de voyage active"
+    },
+    "shapes": {
+      "points": "points",
+      "noValidPoints": "Le tracé ne contient aucun point de coordonnées valide"
     }
   },
   "validation": {
@@ -1413,7 +1417,9 @@
       "load": "Charger",
       "newId": "Nouvel ID",
       "selectShape": "Sélectionner Tracé",
-      "shapeLoaded": "{{count}} points chargés depuis le tracé"
+      "shapeLoaded": "{{count}} points chargés depuis le tracé",
+      "shapeLoadedWithWarning": "{{count}} points chargés depuis le tracé ({{skipped}} points invalides ignorés)",
+      "noValidCoordinates": "Le tracé ne contient aucune coordonnée valide"
     },
     "nextReview": "Suivant : Vérifier et Créer"
   }

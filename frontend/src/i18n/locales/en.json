@@ -993,6 +993,10 @@
       "propagatedDelay": "Propagated Delay",
       "serviceDates": "Service Dates",
       "noModifications": "No trip modifications active"
+    },
+    "shapes": {
+      "points": "points",
+      "noValidPoints": "Shape has no valid coordinate points"
     }
   },
   "validation": {
@@ -1575,7 +1579,9 @@
       "load": "Load",
       "newId": "New ID",
       "selectShape": "Select Shape",
-      "shapeLoaded": "Loaded {{count}} points from shape"
+      "shapeLoaded": "Loaded {{count}} points from shape",
+      "shapeLoadedWithWarning": "Loaded {{count}} points from shape ({{skipped}} invalid points skipped)",
+      "noValidCoordinates": "Shape contains no valid coordinates"
     },
     "nextReview": "Next: Review & Create"
   }
